@@ -147,10 +147,13 @@ function IntroPanel({ isMobile }) {
             How to use this tool
           </div>
           <div style={{ marginBottom: 4 }}>
-            <span style={{ color: t.accent, fontWeight: 600 }}>Withdrawn Products</span> — drugs and biologics removed from market
+            <span style={{ color: t.accent, fontWeight: 600 }}>All Biologics</span> — all BLA (Biologics License Application) entries
           </div>
           <div style={{ marginBottom: 4 }}>
-            <span style={{ color: t.accent, fontWeight: 600 }}>All Biologics</span> — all BLA (Biologics License Application) entries
+            <span style={{ color: t.accent, fontWeight: 600 }}>Discontinued</span> — products no longer actively marketed
+          </div>
+          <div style={{ marginBottom: 4 }}>
+            <span style={{ color: t.accent, fontWeight: 600 }}>Withdrawn</span> — drugs and biologics formally removed from market
           </div>
           <div>
             <span style={{ color: t.accent, fontWeight: 600 }}>Search</span> — query openFDA (try "gene therapy" or an application number)
@@ -427,7 +430,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [selected, setSelected] = useState(null);
-  const [filter, setFilter] = useState("withdrawn");
+  const [filter, setFilter] = useState("all_bla");
   const [searchQuery, setSearchQuery] = useState("");
   const [stats, setStats] = useState(null);
   const [totalHits, setTotalHits] = useState(0);
@@ -462,6 +465,8 @@ export default function App() {
       let searchParam;
       if (query === "__withdrawn__") {
         searchParam = "products.marketing_status:%22Withdrawn%22";
+      } else if (query === "__discontinued__") {
+        searchParam = "products.marketing_status:%22Discontinued%22";
       } else if (query === "__bla__") {
         searchParam = "application_number:BLA*";
       } else {
@@ -469,15 +474,25 @@ export default function App() {
       }
       const url = `${OPENFDA_BASE}?search=${searchParam}&limit=99`;
       const res = await fetch(url);
+
+      // openFDA returns 404 when there are zero matches — treat as empty
+      if (res.status === 404) {
+        setApplications([]);
+        setTotalHits(0);
+        return;
+      }
       if (!res.ok) {
-        const body = await res.text().catch(() => "");
-        throw new Error(`API returned ${res.status}${body ? ": " + body.slice(0, 120) : ""}`);
+        throw new Error(`Unexpected response (${res.status}). The openFDA API may be temporarily unavailable.`);
       }
       const data = await res.json();
       setApplications(data.results || []);
       setTotalHits(data.meta?.results?.total || 0);
     } catch (e) {
-      setError(e.message);
+      if (e.name === "TypeError" && e.message.includes("fetch")) {
+        setError("The openFDA API didn't respond. It may be temporarily down, or a browser extension could be blocking the request.");
+      } else {
+        setError(e.message);
+      }
       setApplications([]);
     } finally {
       setLoading(false);
@@ -493,7 +508,7 @@ export default function App() {
       } catch {}
     }
     getStats();
-    fetchData("__withdrawn__");
+    fetchData("__bla__");
   }, [fetchData]);
 
   const handleSelect = (app) => {
@@ -508,8 +523,9 @@ export default function App() {
 
   const handleFilterChange = (f) => {
     setFilter(f);
-    if (f === "withdrawn") fetchData("__withdrawn__");
-    else if (f === "all_bla") fetchData("__bla__");
+    if (f === "all_bla") fetchData("__bla__");
+    else if (f === "withdrawn") fetchData("__withdrawn__");
+    else if (f === "discontinued") fetchData("__discontinued__");
   };
 
   const handleSearch = (e) => {
@@ -521,8 +537,9 @@ export default function App() {
   };
 
   const filterButtons = [
+    { key: "all_bla", label: "All Biologics" },
+    { key: "discontinued", label: "Discontinued" },
     { key: "withdrawn", label: "Withdrawn" },
-    { key: "all_bla", label: "Biologics" },
   ];
 
   // On mobile, show either list or detail
@@ -711,21 +728,49 @@ export default function App() {
                 </div>
               )}
               {error && (
-                <div style={{ padding: 24, fontSize: 13, color: t.red, lineHeight: 1.5 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Something went wrong</div>
-                  <div style={{ fontSize: 12, color: t.textMuted }}>{error}</div>
-                  <button onClick={() => fetchData("__withdrawn__")}
+                <div style={{ padding: 24, lineHeight: 1.6 }}>
+                  <div style={{ fontSize: 24, marginBottom: 8 }}>⚠️</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: t.textHeading, marginBottom: 6 }}>
+                    Couldn't load results
+                  </div>
+                  <div style={{ fontSize: 12, color: t.textMuted, marginBottom: 16 }}>{error}</div>
+                  <button onClick={() => fetchData("__bla__")}
                     style={{
-                      marginTop: 12, padding: "6px 14px", fontSize: 12, fontWeight: 500,
-                      background: t.bgCard, border: `1px solid ${t.border}`,
-                      borderRadius: 6, cursor: "pointer", color: t.text,
+                      padding: "8px 16px", fontSize: 12, fontWeight: 500,
+                      background: t.accent, color: "#fff", border: "none",
+                      borderRadius: 6, cursor: "pointer",
                     }}
-                  >Try again</button>
+                  >Load All Biologics</button>
                 </div>
               )}
               {!loading && !error && applications.length === 0 && (
-                <div style={{ padding: 24, fontSize: 13, color: t.textMuted, lineHeight: 1.6 }}>
-                  No results found. Try a different search term or filter.
+                <div style={{ padding: 24, lineHeight: 1.6 }}>
+                  <div style={{ fontSize: 24, marginBottom: 8 }}>🔍</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: t.textHeading, marginBottom: 6 }}>
+                    No matches found
+                  </div>
+                  <div style={{ fontSize: 12, color: t.textMuted, marginBottom: 16 }}>
+                    This filter didn't return any results from the openFDA database. This can happen when a category has no entries or the search term doesn't match any records.
+                  </div>
+                  <div style={{ fontSize: 12, color: t.textSecondary, marginBottom: 12 }}>
+                    Try one of these instead:
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {[
+                      { label: "All Biologics (BLAs)", action: () => handleFilterChange("all_bla") },
+                      { label: "Discontinued Products", action: () => handleFilterChange("discontinued") },
+                      { label: 'Search "gene therapy"', action: () => { setSearchQuery("gene therapy"); setFilter("search"); fetchData("gene therapy"); } },
+                    ].map((s, i) => (
+                      <button key={i} onClick={s.action}
+                        style={{
+                          padding: "8px 14px", fontSize: 12, fontWeight: 500,
+                          background: t.bgCard, border: `1px solid ${t.border}`,
+                          borderRadius: 6, cursor: "pointer", color: t.accent,
+                          textAlign: "left", transition: "background 0.12s",
+                        }}
+                      >{s.label}</button>
+                    ))}
+                  </div>
                 </div>
               )}
               {!loading && applications.map((app, i) => (
