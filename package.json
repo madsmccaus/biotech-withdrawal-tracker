@@ -1,0 +1,22 @@
+{
+  "name": "biotech-withdrawal-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Track withdrawn biotech applications across FDA, USDA, and EPA using public government APIs",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "fetch-data": "node scripts/fetch-withdrawals.mjs"
+  },
+  "keywords": ["biotech", "fda", "openfda", "regulatory", "tracker"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@vitejs/plugin-react": "^6.0.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "vite": "^8.0.3"
+  }
+}
