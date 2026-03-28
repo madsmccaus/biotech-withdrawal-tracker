@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, useMemo, createContext, useContext } from "react";
 
 const OPENFDA_BASE = "https://api.fda.gov/drug/drugsfda.json";
 
@@ -40,7 +40,7 @@ const themes = {
 const ThemeContext = createContext(themes.dark);
 function useTheme() { return useContext(ThemeContext); }
 
-// ─── Responsive Hook ────────────────────────────────────────
+// ─── Hooks ──────────────────────────────────────────────────
 
 function useIsMobile(breakpoint = 768) {
   const [isMobile, setIsMobile] = useState(() =>
@@ -64,6 +64,19 @@ function formatDate(dateStr) {
   try {
     return new Date(d).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
   } catch { return dateStr; }
+}
+
+function getLatestSubmissionDate(app) {
+  const dates = (app.submissions || [])
+    .map(s => s.submission_status_date)
+    .filter(Boolean)
+    .sort()
+    .reverse();
+  return dates[0] || "00000000";
+}
+
+function getSponsor(app) {
+  return app.sponsor_name || app.openfda?.manufacturer_name?.[0] || "";
 }
 
 // ─── Small Components ───────────────────────────────────────
@@ -119,6 +132,27 @@ function ThemeToggle({ isDark, onToggle }) {
   );
 }
 
+function SelectInput({ value, onChange, options, placeholder, style: extraStyle }) {
+  const t = useTheme();
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)}
+      style={{
+        padding: "6px 10px", fontSize: 12,
+        fontFamily: "'JetBrains Mono', monospace",
+        background: t.bgInput, border: `1px solid ${t.border}`,
+        borderRadius: 6, color: t.text, outline: "none",
+        cursor: "pointer", appearance: "auto",
+        ...extraStyle,
+      }}
+    >
+      {placeholder && <option value="">{placeholder}</option>}
+      {options.map(o => (
+        <option key={o.value} value={o.value}>{o.label}</option>
+      ))}
+    </select>
+  );
+}
+
 // ─── Intro Panel ────────────────────────────────────────────
 
 function IntroPanel({ isMobile }) {
@@ -155,8 +189,11 @@ function IntroPanel({ isMobile }) {
           <div style={{ marginBottom: 4 }}>
             <span style={{ color: t.accent, fontWeight: 600 }}>Withdrawn</span> — drugs and biologics formally removed from market
           </div>
-          <div>
+          <div style={{ marginBottom: 8 }}>
             <span style={{ color: t.accent, fontWeight: 600 }}>Search</span> — query openFDA (try "gene therapy" or an application number)
+          </div>
+          <div style={{ borderTop: `1px solid ${t.border}`, paddingTop: 8, color: t.textMuted, fontSize: 11 }}>
+            Use the filters below the tabs to narrow by year, sponsor, or change the sort order.
           </div>
         </div>
       </div>
@@ -169,16 +206,18 @@ function IntroPanel({ isMobile }) {
 function AppCard({ app, onSelect, isSelected, isMobile }) {
   const t = useTheme();
   const withdrawn = (app.products || []).filter(p => p.marketing_status === "Withdrawn");
-  const sponsor = app.sponsor_name || app.openfda?.manufacturer_name?.[0] || "Unknown sponsor";
+  const sponsor = getSponsor(app) || "Unknown sponsor";
   const brand = app.openfda?.brand_name?.[0] || "Unnamed product";
   const generic = app.openfda?.generic_name?.[0] || "";
   const pharmClass = app.openfda?.pharm_class_epc?.[0] || "";
   const isBLA = (app.application_number || "").startsWith("BLA");
+  const latestDate = getLatestSubmissionDate(app);
+  const yearStr = latestDate.length >= 4 ? latestDate.slice(0, 4) : "";
 
   return (
     <div onClick={() => onSelect(app)}
       style={{
-        padding: isMobile ? "14px 16px" : "14px 16px",
+        padding: "14px 16px",
         background: isSelected && !isMobile ? t.bgCardSelected : "transparent",
         borderBottom: `1px solid ${t.borderLight}`,
         cursor: "pointer", transition: "background 0.12s",
@@ -199,15 +238,19 @@ function AppCard({ app, onSelect, isSelected, isMobile }) {
           }}>
             {app.application_number}
           </span>
-          {isMobile && (
-            <span style={{ color: t.textFaint, fontSize: 16 }}>›</span>
-          )}
+          {isMobile && <span style={{ color: t.textFaint, fontSize: 16 }}>›</span>}
         </div>
       </div>
       {generic && <div style={{ fontSize: 11, color: t.textSecondary, marginBottom: 3 }}>{generic}</div>}
-      <div style={{ fontSize: 11, color: t.textMuted, marginBottom: 6 }}>{sponsor}</div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <span style={{ fontSize: 11, color: t.textMuted }}>{sponsor}</span>
+        {yearStr && (
+          <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono', monospace", color: t.textFaint }}>{yearStr}</span>
+        )}
+      </div>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
         {withdrawn.length > 0 && <StatusPill status="Withdrawn" />}
+        {(app.products || []).some(p => p.marketing_status === "Discontinued") && <StatusPill status="Discontinued" />}
         {pharmClass && (
           <span style={{
             fontSize: 10, color: t.textMuted, background: t.bgPill, padding: "2px 6px",
@@ -228,7 +271,7 @@ function DetailPanel({ app, isMobile, onBack }) {
 
   if (!app) return <IntroPanel isMobile={isMobile} />;
 
-  const sponsor = app.sponsor_name || app.openfda?.manufacturer_name?.[0] || "Unknown";
+  const sponsor = getSponsor(app) || "Unknown";
   const brand = app.openfda?.brand_name?.[0] || "Unnamed";
   const generic = app.openfda?.generic_name?.[0] || "—";
   const substances = app.openfda?.substance_name?.join(", ") || "—";
@@ -247,7 +290,6 @@ function DetailPanel({ app, isMobile, onBack }) {
 
   return (
     <div style={{ padding: pad, overflowY: "auto", height: "100%" }}>
-      {/* Back button (mobile) */}
       {isMobile && onBack && (
         <button onClick={onBack} style={{
           display: "flex", alignItems: "center", gap: 6,
@@ -259,7 +301,6 @@ function DetailPanel({ app, isMobile, onBack }) {
         </button>
       )}
 
-      {/* Header */}
       <div style={{ marginBottom: 24, paddingBottom: 20, borderBottom: `1px solid ${t.border}` }}>
         <div style={{ fontSize: isMobile ? 19 : 22, fontWeight: 700, color: t.textHeading, marginBottom: 4, lineHeight: 1.2 }}>
           {brand}
@@ -280,22 +321,14 @@ function DetailPanel({ app, isMobile, onBack }) {
               BIOLOGIC
             </span>
           )}
-          {(app.products || []).some(p => p.marketing_status === "Withdrawn") && (
-            <StatusPill status="Withdrawn" />
-          )}
+          {(app.products || []).some(p => p.marketing_status === "Withdrawn") && <StatusPill status="Withdrawn" />}
+          {(app.products || []).some(p => p.marketing_status === "Discontinued") && <StatusPill status="Discontinued" />}
         </div>
       </div>
 
-      {/* Info Grid */}
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 16 : 20, ...sectionStyle }}>
-        <div>
-          <div style={labelStyle}>Sponsor</div>
-          <div style={valueStyle}>{sponsor}</div>
-        </div>
-        <div>
-          <div style={labelStyle}>Route</div>
-          <div style={{ ...valueStyle, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{route}</div>
-        </div>
+        <div><div style={labelStyle}>Sponsor</div><div style={valueStyle}>{sponsor}</div></div>
+        <div><div style={labelStyle}>Route</div><div style={{ ...valueStyle, fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{route}</div></div>
       </div>
 
       <div style={sectionStyle}>
@@ -304,17 +337,10 @@ function DetailPanel({ app, isMobile, onBack }) {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "1fr 1fr", gap: isMobile ? 16 : 20, ...sectionStyle }}>
-        <div>
-          <div style={labelStyle}>Pharmacologic Class</div>
-          <div style={{ ...valueStyle, fontSize: 12 }}>{pharmClass.replace(/\s*\[EPC\]\s*/g, "")}</div>
-        </div>
-        <div>
-          <div style={labelStyle}>Mechanism of Action</div>
-          <div style={{ ...valueStyle, fontSize: 12 }}>{moa.replace(/\s*\[MoA\]\s*/g, "")}</div>
-        </div>
+        <div><div style={labelStyle}>Pharmacologic Class</div><div style={{ ...valueStyle, fontSize: 12 }}>{pharmClass.replace(/\s*\[EPC\]\s*/g, "")}</div></div>
+        <div><div style={labelStyle}>Mechanism of Action</div><div style={{ ...valueStyle, fontSize: 12 }}>{moa.replace(/\s*\[MoA\]\s*/g, "")}</div></div>
       </div>
 
-      {/* Products */}
       <div style={sectionStyle}>
         <div style={labelStyle}>Products ({(app.products || []).length})</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -340,7 +366,6 @@ function DetailPanel({ app, isMobile, onBack }) {
         </div>
       </div>
 
-      {/* Submissions Timeline */}
       <div style={sectionStyle}>
         <div style={labelStyle}>Submission History ({(app.submissions || []).length})</div>
         <div style={{ position: "relative", paddingLeft: 20 }}>
@@ -373,8 +398,7 @@ function DetailPanel({ app, isMobile, onBack }) {
                 </div>
                 <span style={{
                   fontSize: 10, fontFamily: "'JetBrains Mono', monospace",
-                  color: t.textFaint, whiteSpace: "nowrap",
-                  marginLeft: isMobile ? 0 : 12,
+                  color: t.textFaint, whiteSpace: "nowrap", marginLeft: isMobile ? 0 : 12,
                 }}>
                   {formatDate(s.submission_status_date)}
                 </span>
@@ -382,8 +406,7 @@ function DetailPanel({ app, isMobile, onBack }) {
               {s.submission_status && (
                 <div style={{
                   fontSize: 10, fontFamily: "'JetBrains Mono', monospace",
-                  color: s.submission_status === "AP" ? t.green : t.textMuted,
-                  marginTop: 2,
+                  color: s.submission_status === "AP" ? t.green : t.textMuted, marginTop: 2,
                 }}>
                   {s.submission_status}
                 </div>
@@ -392,8 +415,7 @@ function DetailPanel({ app, isMobile, onBack }) {
                 <div style={{
                   fontSize: 11, color: t.red, marginTop: 6,
                   padding: "6px 10px", background: t.redBg, borderRadius: 6,
-                  border: `1px solid ${t.redBorder}`, lineHeight: 1.5,
-                  wordBreak: "break-word",
+                  border: `1px solid ${t.redBorder}`, lineHeight: 1.5, wordBreak: "break-word",
                 }}>
                   {s.submission_public_notes}
                 </div>
@@ -434,8 +456,13 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [stats, setStats] = useState(null);
   const [totalHits, setTotalHits] = useState(0);
-  const [mobileView, setMobileView] = useState("list"); // "list" | "detail"
+  const [mobileView, setMobileView] = useState("list");
   const isMobile = useIsMobile();
+
+  // Filtering & sorting state
+  const [yearFilter, setYearFilter] = useState("");
+  const [sponsorFilter, setSponsorFilter] = useState("");
+  const [sortBy, setSortBy] = useState("date_desc"); // date_desc | date_asc | app_num | sponsor
 
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== "undefined") {
@@ -456,26 +483,45 @@ export default function App() {
     });
   };
 
-  const fetchData = useCallback(async (query) => {
+  // ── Build query with filters ──
+
+  const buildQuery = useCallback((base, year, sponsor) => {
+    const parts = [];
+
+    // Base query
+    if (base === "__withdrawn__") {
+      parts.push("products.marketing_status:%22Withdrawn%22");
+    } else if (base === "__discontinued__") {
+      parts.push("products.marketing_status:%22Discontinued%22");
+    } else if (base === "__bla__") {
+      parts.push("application_number:BLA*");
+    } else if (base) {
+      parts.push(encodeURIComponent(base));
+    }
+
+    // Year filter — search for submissions with status dates in that year
+    if (year) {
+      parts.push(`submissions.submission_status_date:[${year}0101+TO+${year}1231]`);
+    }
+
+    // Sponsor filter
+    if (sponsor) {
+      parts.push(`openfda.manufacturer_name:%22${encodeURIComponent(sponsor)}%22`);
+    }
+
+    return parts.join("+AND+");
+  }, []);
+
+  const fetchData = useCallback(async (base, year = "", sponsor = "") => {
     setLoading(true);
     setError(null);
     setSelected(null);
     setMobileView("list");
     try {
-      let searchParam;
-      if (query === "__withdrawn__") {
-        searchParam = "products.marketing_status:%22Withdrawn%22";
-      } else if (query === "__discontinued__") {
-        searchParam = "products.marketing_status:%22Discontinued%22";
-      } else if (query === "__bla__") {
-        searchParam = "application_number:BLA*";
-      } else {
-        searchParam = encodeURIComponent(query);
-      }
+      const searchParam = buildQuery(base, year, sponsor);
       const url = `${OPENFDA_BASE}?search=${searchParam}&limit=99`;
       const res = await fetch(url);
 
-      // openFDA returns 404 when there are zero matches — treat as empty
       if (res.status === 404) {
         setApplications([]);
         setTotalHits(0);
@@ -497,7 +543,21 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [buildQuery]);
+
+  // Get the current base query from filter state
+  const getBaseQuery = useCallback(() => {
+    if (filter === "all_bla") return "__bla__";
+    if (filter === "withdrawn") return "__withdrawn__";
+    if (filter === "discontinued") return "__discontinued__";
+    if (filter === "search") return searchQuery;
+    return "__bla__";
+  }, [filter, searchQuery]);
+
+  // Refetch when year/sponsor filters change
+  const applyFilters = useCallback(() => {
+    fetchData(getBaseQuery(), yearFilter, sponsorFilter);
+  }, [fetchData, getBaseQuery, yearFilter, sponsorFilter]);
 
   useEffect(() => {
     async function getStats() {
@@ -511,6 +571,24 @@ export default function App() {
     fetchData("__bla__");
   }, [fetchData]);
 
+  // ── Client-side sorting ──
+
+  const sortedApplications = useMemo(() => {
+    const sorted = [...applications];
+    switch (sortBy) {
+      case "date_desc":
+        return sorted.sort((a, b) => getLatestSubmissionDate(b).localeCompare(getLatestSubmissionDate(a)));
+      case "date_asc":
+        return sorted.sort((a, b) => getLatestSubmissionDate(a).localeCompare(getLatestSubmissionDate(b)));
+      case "app_num":
+        return sorted.sort((a, b) => (a.application_number || "").localeCompare(b.application_number || ""));
+      case "sponsor":
+        return sorted.sort((a, b) => getSponsor(a).localeCompare(getSponsor(b)));
+      default:
+        return sorted;
+    }
+  }, [applications, sortBy]);
+
   const handleSelect = (app) => {
     setSelected(app);
     if (isMobile) setMobileView("detail");
@@ -523,18 +601,36 @@ export default function App() {
 
   const handleFilterChange = (f) => {
     setFilter(f);
-    if (f === "all_bla") fetchData("__bla__");
-    else if (f === "withdrawn") fetchData("__withdrawn__");
-    else if (f === "discontinued") fetchData("__discontinued__");
+    const base = f === "all_bla" ? "__bla__" : f === "withdrawn" ? "__withdrawn__" : "__discontinued__";
+    fetchData(base, yearFilter, sponsorFilter);
   };
 
   const handleSearch = (e) => {
     e.preventDefault();
     if (searchQuery.trim()) {
       setFilter("search");
-      fetchData(searchQuery.trim());
+      fetchData(searchQuery.trim(), yearFilter, sponsorFilter);
     }
   };
+
+  const handleYearChange = (year) => {
+    setYearFilter(year);
+    // Immediate refetch with new year
+    fetchData(getBaseQuery(), year, sponsorFilter);
+  };
+
+  const handleSponsorSubmit = (e) => {
+    e.preventDefault();
+    applyFilters();
+  };
+
+  const clearFilters = () => {
+    setYearFilter("");
+    setSponsorFilter("");
+    fetchData(getBaseQuery(), "", "");
+  };
+
+  const hasActiveFilters = yearFilter || sponsorFilter;
 
   const filterButtons = [
     { key: "all_bla", label: "All Biologics" },
@@ -542,7 +638,19 @@ export default function App() {
     { key: "withdrawn", label: "Withdrawn" },
   ];
 
-  // On mobile, show either list or detail
+  const yearOptions = [];
+  const currentYear = new Date().getFullYear();
+  for (let y = currentYear; y >= 1990; y--) {
+    yearOptions.push({ value: String(y), label: String(y) });
+  }
+
+  const sortOptions = [
+    { value: "date_desc", label: "Newest first" },
+    { value: "date_asc", label: "Oldest first" },
+    { value: "app_num", label: "Application #" },
+    { value: "sponsor", label: "Sponsor A–Z" },
+  ];
+
   const showList = !isMobile || mobileView === "list";
   const showDetail = !isMobile || mobileView === "detail";
 
@@ -562,6 +670,7 @@ export default function App() {
           ::-webkit-scrollbar { width: 6px; }
           ::-webkit-scrollbar-track { background: transparent; }
           ::-webkit-scrollbar-thumb { background: ${t.scrollThumb}; border-radius: 3px; }
+          select { color-scheme: ${isDark ? "dark" : "light"}; }
         `}</style>
 
         {/* ── Header ── */}
@@ -570,7 +679,6 @@ export default function App() {
           borderBottom: `1px solid ${t.border}`,
           background: t.bgHeader, flexShrink: 0,
         }}>
-          {/* Top row: title + theme toggle */}
           <div style={{
             display: "flex", alignItems: "center", justifyContent: "space-between",
             marginBottom: isMobile ? 10 : 0,
@@ -578,10 +686,7 @@ export default function App() {
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ fontSize: isMobile ? 16 : 18 }}>🔬</span>
               <div>
-                <div style={{
-                  fontSize: isMobile ? 14 : 15, fontWeight: 700,
-                  color: t.textHeading, letterSpacing: "-0.01em",
-                }}>
+                <div style={{ fontSize: isMobile ? 14 : 15, fontWeight: 700, color: t.textHeading, letterSpacing: "-0.01em" }}>
                   Biotech Withdrawal Tracker
                 </div>
                 {!isMobile && (
@@ -592,7 +697,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Desktop: search inline with title */}
             {!isMobile && (
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <form onSubmit={handleSearch} style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -624,12 +728,9 @@ export default function App() {
                 <ThemeToggle isDark={isDark} onToggle={toggleTheme} />
               </div>
             )}
-
-            {/* Mobile: just theme toggle */}
             {isMobile && <ThemeToggle isDark={isDark} onToggle={toggleTheme} />}
           </div>
 
-          {/* Mobile: search below title */}
           {isMobile && (
             <form onSubmit={handleSearch} style={{ display: "flex", gap: 6 }}>
               <div style={{ position: "relative", flex: 1 }}>
@@ -659,13 +760,12 @@ export default function App() {
           )}
         </div>
 
-        {/* ── Filter Bar ── */}
+        {/* ── Filter Bar: View Tabs ── */}
         <div style={{
           padding: isMobile ? "8px 16px" : "10px 24px",
           borderBottom: `1px solid ${t.border}`,
           display: "flex", alignItems: "center", justifyContent: "space-between",
-          flexShrink: 0, background: t.bgSurface,
-          gap: 8, overflowX: "auto",
+          flexShrink: 0, background: t.bgSurface, gap: 8, overflowX: "auto",
         }}>
           <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
             {!isMobile && <span style={{ fontSize: 11, color: t.textMuted, marginRight: 4, fontWeight: 500 }}>View:</span>}
@@ -677,8 +777,7 @@ export default function App() {
                   background: filter === f.key ? t.accentBg : "transparent",
                   color: filter === f.key ? t.accentSoft : t.textMuted,
                   border: `1px solid ${filter === f.key ? t.accentBorder : "transparent"}`,
-                  borderRadius: 6, cursor: "pointer", transition: "all 0.12s",
-                  whiteSpace: "nowrap",
+                  borderRadius: 6, cursor: "pointer", transition: "all 0.12s", whiteSpace: "nowrap",
                 }}
               >
                 {f.label}
@@ -703,29 +802,83 @@ export default function App() {
                 {totalHits.toLocaleString()} results
               </span>
             )}
-            {!isMobile && stats?.marketingStatuses && (
-              <span style={{ fontSize: 10, fontFamily: "'JetBrains Mono', monospace", color: t.textFaint, whiteSpace: "nowrap" }}>
-                {stats.marketingStatuses.find(s => s.term === "Withdrawn")?.count.toLocaleString() || "?"} withdrawn across all FDA products
-              </span>
-            )}
           </div>
+        </div>
+
+        {/* ── Filter Bar: Refine Controls ── */}
+        <div style={{
+          padding: isMobile ? "8px 16px" : "8px 24px",
+          borderBottom: `1px solid ${t.border}`,
+          display: "flex", alignItems: "center", gap: isMobile ? 8 : 12,
+          flexShrink: 0, background: t.bgSurface,
+          flexWrap: isMobile ? "wrap" : "nowrap",
+        }}>
+          {!isMobile && <span style={{ fontSize: 11, color: t.textMuted, fontWeight: 500, flexShrink: 0 }}>Filter:</span>}
+
+          <SelectInput
+            value={yearFilter}
+            onChange={handleYearChange}
+            options={yearOptions}
+            placeholder="Any year"
+            style={{ minWidth: isMobile ? 0 : 110, flex: isMobile ? 1 : undefined }}
+          />
+
+          <form onSubmit={handleSponsorSubmit} style={{ display: "flex", gap: 4, flex: isMobile ? "1 1 100%" : undefined }}>
+            <input
+              type="text"
+              value={sponsorFilter}
+              onChange={e => setSponsorFilter(e.target.value)}
+              placeholder="Sponsor name..."
+              style={{
+                padding: "6px 10px", fontSize: 12,
+                fontFamily: "'JetBrains Mono', monospace",
+                background: t.bgInput, border: `1px solid ${t.border}`,
+                borderRadius: 6, color: t.text, outline: "none",
+                flex: 1, minWidth: 0,
+              }}
+              onFocus={e => e.target.style.borderColor = t.borderFocus}
+              onBlur={e => e.target.style.borderColor = t.border}
+            />
+            <button type="submit" style={{
+              padding: "6px 10px", fontSize: 11, fontWeight: 600,
+              background: t.accentBg, color: t.accentSoft,
+              border: `1px solid ${t.accentBorder}`,
+              borderRadius: 6, cursor: "pointer", flexShrink: 0,
+            }}>Apply</button>
+          </form>
+
+          <div style={{ display: "flex", gap: 4, alignItems: "center", marginLeft: isMobile ? 0 : "auto" }}>
+            {!isMobile && <span style={{ fontSize: 11, color: t.textMuted, fontWeight: 500, flexShrink: 0 }}>Sort:</span>}
+            <SelectInput
+              value={sortBy}
+              onChange={setSortBy}
+              options={sortOptions}
+              style={{ minWidth: isMobile ? 0 : 130 }}
+            />
+          </div>
+
+          {hasActiveFilters && (
+            <button onClick={clearFilters}
+              style={{
+                padding: "5px 10px", fontSize: 11, fontWeight: 500,
+                background: "transparent", color: t.textMuted,
+                border: `1px solid ${t.border}`,
+                borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+              }}
+            >Clear filters</button>
+          )}
         </div>
 
         {/* ── Main Content ── */}
         <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
-
-          {/* List Panel */}
           {showList && (
             <div style={{
-              width: isMobile ? "100%" : 380,
-              flexShrink: 0,
+              width: isMobile ? "100%" : 380, flexShrink: 0,
               borderRight: isMobile ? "none" : `1px solid ${t.border}`,
               overflowY: "auto", background: t.bgSurface,
             }}>
               {loading && (
-                <div style={{ padding: 24 }}>
-                  <Spinner message="Querying openFDA..." />
-                </div>
+                <div style={{ padding: 24 }}><Spinner message="Querying openFDA..." /></div>
               )}
               {error && (
                 <div style={{ padding: 24, lineHeight: 1.6 }}>
@@ -743,37 +896,42 @@ export default function App() {
                   >Load All Biologics</button>
                 </div>
               )}
-              {!loading && !error && applications.length === 0 && (
+              {!loading && !error && sortedApplications.length === 0 && (
                 <div style={{ padding: 24, lineHeight: 1.6 }}>
                   <div style={{ fontSize: 24, marginBottom: 8 }}>🔍</div>
                   <div style={{ fontSize: 14, fontWeight: 600, color: t.textHeading, marginBottom: 6 }}>
                     No matches found
                   </div>
                   <div style={{ fontSize: 12, color: t.textMuted, marginBottom: 16 }}>
-                    This filter didn't return any results from the openFDA database. This can happen when a category has no entries or the search term doesn't match any records.
-                  </div>
-                  <div style={{ fontSize: 12, color: t.textSecondary, marginBottom: 12 }}>
-                    Try one of these instead:
+                    This combination of view and filters didn't return any results. {hasActiveFilters ? "Try clearing your filters or broadening the search." : "Try a different search term or view."}
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {hasActiveFilters && (
+                      <button onClick={clearFilters}
+                        style={{
+                          padding: "8px 14px", fontSize: 12, fontWeight: 500,
+                          background: t.bgCard, border: `1px solid ${t.border}`,
+                          borderRadius: 6, cursor: "pointer", color: t.accent, textAlign: "left",
+                        }}
+                      >Clear all filters</button>
+                    )}
                     {[
-                      { label: "All Biologics (BLAs)", action: () => handleFilterChange("all_bla") },
-                      { label: "Discontinued Products", action: () => handleFilterChange("discontinued") },
-                      { label: 'Search "gene therapy"', action: () => { setSearchQuery("gene therapy"); setFilter("search"); fetchData("gene therapy"); } },
+                      { label: "All Biologics (BLAs)", action: () => { clearFilters(); handleFilterChange("all_bla"); } },
+                      { label: "Discontinued Products", action: () => { clearFilters(); handleFilterChange("discontinued"); } },
+                      { label: 'Search "gene therapy"', action: () => { clearFilters(); setSearchQuery("gene therapy"); setFilter("search"); fetchData("gene therapy"); } },
                     ].map((s, i) => (
                       <button key={i} onClick={s.action}
                         style={{
                           padding: "8px 14px", fontSize: 12, fontWeight: 500,
                           background: t.bgCard, border: `1px solid ${t.border}`,
-                          borderRadius: 6, cursor: "pointer", color: t.accent,
-                          textAlign: "left", transition: "background 0.12s",
+                          borderRadius: 6, cursor: "pointer", color: t.accent, textAlign: "left",
                         }}
                       >{s.label}</button>
                     ))}
                   </div>
                 </div>
               )}
-              {!loading && applications.map((app, i) => (
+              {!loading && sortedApplications.map((app, i) => (
                 <AppCard key={app.application_number + i} app={app}
                   onSelect={handleSelect}
                   isSelected={selected?.application_number === app.application_number}
@@ -783,7 +941,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Detail Panel */}
           {showDetail && !isMobile && (
             <div style={{ flex: 1, overflow: "hidden", background: t.bg }}>
               <DetailPanel app={selected} isMobile={false} />
@@ -799,10 +956,8 @@ export default function App() {
         {/* ── Footer ── */}
         <div style={{
           padding: isMobile ? "8px 16px" : "8px 24px",
-          borderTop: `1px solid ${t.border}`,
-          background: t.bgSurface,
-          display: "flex", justifyContent: "space-between", alignItems: "center",
-          flexShrink: 0,
+          borderTop: `1px solid ${t.border}`, background: t.bgSurface,
+          display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0,
         }}>
           <span style={{ fontSize: 10, color: t.textFaint }}>
             Data from openFDA · Not for clinical use
